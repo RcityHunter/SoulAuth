@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use surrealdb::types::SurrealValue;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+use crate::models::subject::SubjectType;
+
+#[derive(Debug, Serialize, Deserialize, Clone, SurrealValue)]
 pub struct OidcAuthorizationCode {
     pub id: Option<String>,
     pub code: String,
@@ -17,24 +20,28 @@ pub struct OidcAuthorizationCode {
     pub created_at: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, SurrealValue)]
 pub struct OidcAccessToken {
     pub id: Option<String>,
     pub token: String,
     pub token_type: String,
     pub client_id: String,
-    pub user_id: String,
+    pub subject_id: String,
+    pub subject_type: SubjectType,
+    pub user_id: Option<String>,
     pub scope: String,
     pub expires_at: i64,
     pub created_at: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, SurrealValue)]
 pub struct OidcRefreshToken {
     pub id: Option<String>,
     pub token: String,
     pub client_id: String,
-    pub user_id: String,
+    pub subject_id: String,
+    pub subject_type: SubjectType,
+    pub user_id: Option<String>,
     pub access_token: String,
     pub scope: String,
     pub used: bool,
@@ -52,7 +59,7 @@ pub struct TokenResponse {
     pub scope: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TokenRequest {
     pub grant_type: String,
     pub code: Option<String>,
@@ -96,6 +103,19 @@ pub struct IdTokenClaims {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct AccessTokenClaims {
+    pub iss: String,
+    pub sub: String,
+    pub aud: String,
+    pub exp: i64,
+    pub iat: i64,
+    pub client_id: String,
+    pub scope: String,
+    pub subject_type: SubjectType,
+    pub user_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UserInfoResponse {
     pub sub: String,
     pub email: Option<String>,
@@ -105,4 +125,14 @@ pub struct UserInfoResponse {
     pub profile: Option<String>,
     pub picture: Option<String>,
     pub updated_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenSubjectInfoResponse {
+    pub sub: String,
+    pub subject_type: SubjectType,
+    pub client_id: String,
+    pub scope: String,
+    pub user_id: Option<String>,
+    pub expires_at: i64,
 }

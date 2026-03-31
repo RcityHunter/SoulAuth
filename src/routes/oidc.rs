@@ -1,27 +1,26 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::{
-    extract::{Extension, Query, Form},
-    http::{HeaderMap, header},
-    response::{Redirect, Json},
+    extract::{Extension, Form, Query},
+    http::{header, HeaderMap},
+    response::{Json, Redirect},
     routing::{get, post},
     Router,
 };
-use serde::{Deserialize};
+use base64::{engine::general_purpose, Engine as _};
 use serde_json::json;
-use base64::{Engine as _, engine::general_purpose};
 
 use crate::{
     config::Config,
-    models::{
-        oidc_token::{TokenRequest, AuthorizeRequest, UserInfoResponse},
+    error::AuthError,
+    models::oidc_token::{
+        AuthorizeRequest, TokenRequest, TokenSubjectInfoResponse, UserInfoResponse,
     },
     services::{
-        oidc::{OidcService, OidcConfiguration, JwksResponse},
         database::Database,
+        oidc::{JwksResponse, OidcConfiguration, OidcService},
     },
-    error::AuthError,
     utils::jwt::get_user_from_token,
 };
 
@@ -32,45 +31,39 @@ pub fn oidc_routes() -> Router {
         .route("/authorize", get(authorize))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo))
+        .route("/me", get(me))
         .route("/logout", get(logout))
 }
 
-// OIDC Discovery Endpoint
 async fn openid_configuration(
     Extension(oidc_service): Extension<Arc<OidcService>>,
 ) -> Result<Json<OidcConfiguration>, AuthError> {
-    let config = oidc_service.get_configuration();
-    Ok(Json(config))
+    Ok(Json(oidc_service.get_configuration()))
 }
 
-// JSON Web Key Set
 async fn jwks(
-    Extension(oidc_service): Extension<Arc<OidcService>>,
+    Extension(_oidc_service): Extension<Arc<OidcService>>,
 ) -> Result<Json<JwksResponse>, AuthError> {
-    // 暂时返回空的 JWKS，因为我们使用对称密钥
-    // 在生产环境中应该使用 RSA 公钥
-    let jwks = JwksResponse {
-        keys: vec![],
-    };
-    Ok(Json(jwks))
+    Ok(Json(JwksResponse { keys: vec![] }))
 }
 
-// 授权端点
 async fn authorize(
     Query(params): Query<HashMap<String, String>>,
     Extension(oidc_service): Extension<Arc<OidcService>>,
     Extension(db): Extension<Arc<Database>>,
     headers: HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, AuthError> {
-    // 解析授权请求参数
     let request = AuthorizeRequest {
-        response_type: params.get("response_type")
+        response_type: params
+            .get("response_type")
             .ok_or_else(|| AuthError::BadRequest("Missing response_type".to_string()))?
             .clone(),
-        client_id: params.get("client_id")
+        client_id: params
+            .get("client_id")
             .ok_or_else(|| AuthError::BadRequest("Missing client_id".to_string()))?
             .clone(),
-        redirect_uri: params.get("redirect_uri")
+        redirect_uri: params
+            .get("redirect_uri")
             .ok_or_else(|| AuthError::BadRequest("Missing redirect_uri".to_string()))?
             .clone(),
         scope: params.get("scope").cloned(),
@@ -82,25 +75,30 @@ async fn authorize(
         max_age: params.get("max_age").and_then(|s| s.parse().ok()),
     };
 
-    // 检查用户是否已登录
     if let Some(auth_header) = headers.get(header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
-            if auth_str.starts_with("Bearer ") {
-                let token = &auth_str[7..];
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
                 if let Ok(user) = get_user_from_token(token, &db).await {
-                    // 用户已登录，生成授权码
-                    match oidc_service.create_authorization_code(&request, &crate::utils::record_id::record_id_key_to_string(&user.id.unwrap())).await {
+                    match oidc_service
+                        .create_authorization_code(
+                            &request,
+                            &crate::utils::record_id::record_id_key_to_string(&user.id.unwrap()),
+                        )
+                        .await
+                    {
                         Ok(code) => {
-                            let mut redirect_url = format!("{}?code={}", request.redirect_uri, code);
+                            let mut redirect_url = format!("{}?code={code}", request.redirect_uri);
                             if let Some(state) = request.state {
-                                redirect_url.push_str(&format!("&state={}", state));
+                                redirect_url.push_str(&format!("&state={state}"));
                             }
                             return Ok(Redirect::to(&redirect_url));
                         }
                         Err(e) => {
-                            let error_url = format!("{}?error=server_error&error_description={}", 
-                                                   request.redirect_uri, 
-                                                   urlencoding::encode(&e.to_string()));
+                            let error_url = format!(
+                                "{}?error=server_error&error_description={}",
+                                request.redirect_uri,
+                                urlencoding::encode(&e.to_string())
+                            );
                             return Ok(Redirect::to(&error_url));
                         }
                     }
@@ -109,16 +107,24 @@ async fn authorize(
         }
     }
 
-    // 用户未登录，重定向到登录页面
     let login_url = format!("/login?{}", serde_urlencoded::to_string(&params).unwrap_or_default());
     Ok(Redirect::to(&login_url))
 }
 
-// 令牌端点
 async fn token(
     Extension(oidc_service): Extension<Arc<OidcService>>,
-    Form(request): Form<TokenRequest>,
+    headers: HeaderMap,
+    Form(mut request): Form<TokenRequest>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
+    if request.client_secret.is_none() {
+        if let Ok((client_id, client_secret)) = authenticate_client(&headers) {
+            if request.client_id.is_empty() {
+                request.client_id = client_id;
+            }
+            request.client_secret = Some(client_secret);
+        }
+    }
+
     match oidc_service.exchange_code_for_tokens(&request).await {
         Ok(token_response) => Ok(Json(serde_json::to_value(token_response)?)),
         Err(e) => {
@@ -131,89 +137,68 @@ async fn token(
     }
 }
 
-// 用户信息端点
 async fn userinfo(
     Extension(oidc_service): Extension<Arc<OidcService>>,
     headers: HeaderMap,
 ) -> Result<Json<UserInfoResponse>, AuthError> {
-    // 从 Authorization header 获取访问令牌
-    let auth_header = headers.get(header::AUTHORIZATION)
-        .ok_or_else(|| AuthError::Unauthorized("Missing authorization header".to_string()))?;
-    
-    let auth_str = auth_header.to_str()
-        .map_err(|_| AuthError::Unauthorized("Invalid authorization header".to_string()))?;
-    
-    if !auth_str.starts_with("Bearer ") {
-        return Err(AuthError::Unauthorized("Invalid token type".to_string()));
-    }
-    
-    let access_token = &auth_str[7..];
-    
+    let access_token = extract_bearer_token(&headers)?;
+
     match oidc_service.get_userinfo(access_token).await {
         Ok(userinfo) => Ok(Json(userinfo)),
         Err(e) => Err(AuthError::Unauthorized(e.to_string())),
     }
 }
 
-// 登出端点
+async fn me(
+    Extension(oidc_service): Extension<Arc<OidcService>>,
+    headers: HeaderMap,
+) -> Result<Json<TokenSubjectInfoResponse>, AuthError> {
+    let access_token = extract_bearer_token(&headers)?;
+
+    match oidc_service.get_token_subject_info(access_token).await {
+        Ok(info) => Ok(Json(info)),
+        Err(e) => Err(AuthError::Unauthorized(e.to_string())),
+    }
+}
+
 async fn logout(
     Query(params): Query<HashMap<String, String>>,
     Extension(config): Extension<Arc<Config>>,
 ) -> Result<impl axum::response::IntoResponse, AuthError> {
-    // 获取登出后重定向 URI
     let post_logout_redirect_uri = params.get("post_logout_redirect_uri");
-    let id_token_hint = params.get("id_token_hint");
     let state = params.get("state");
 
-    // TODO: 验证 id_token_hint 并执行登出逻辑
-    // TODO: 撤销相关的令牌和会话
-
-    // 构建重定向 URL
     let redirect_url = if let Some(redirect_uri) = post_logout_redirect_uri {
         let mut url = redirect_uri.clone();
         if let Some(state_value) = state {
-            url.push_str(&format!("?state={}", state_value));
+            url.push_str(&format!("?state={state_value}"));
         }
         url
     } else {
-        // 默认重定向到应用首页
         config.app_url.clone()
     };
 
     Ok(Redirect::to(&redirect_url))
 }
 
-// 错误处理辅助函数
-fn create_error_redirect(redirect_uri: &str, error: &str, description: Option<&str>, state: Option<&str>) -> String {
-    let mut url = format!("{}?error={}", redirect_uri, error);
-    
-    if let Some(desc) = description {
-        url.push_str(&format!("&error_description={}", urlencoding::encode(desc)));
-    }
-    
-    if let Some(state_value) = state {
-        url.push_str(&format!("&state={}", state_value));
-    }
-    
-    url
+fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, AuthError> {
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .ok_or_else(|| AuthError::Unauthorized("Missing authorization header".to_string()))?;
+
+    let auth_str = auth_header
+        .to_str()
+        .map_err(|_| AuthError::Unauthorized("Invalid authorization header".to_string()))?;
+
+    auth_str
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| AuthError::Unauthorized("Invalid token type".to_string()))
 }
 
-#[derive(Deserialize)]
-struct ClientCredentials {
-    client_id: String,
-    client_secret: String,
-}
-
-// 中间件：客户端认证
-async fn authenticate_client(
-    headers: HeaderMap,
-    form: Option<Form<ClientCredentials>>,
-) -> Result<(String, String), AuthError> {
-    // 尝试从 Authorization header 获取客户端凭据
+fn authenticate_client(headers: &HeaderMap) -> Result<(String, String), AuthError> {
     if let Some(auth_header) = headers.get(header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
-            if auth_str.starts_with("Basic ") {
-                let encoded = &auth_str[6..];
+            if let Some(encoded) = auth_str.strip_prefix("Basic ") {
                 if let Ok(decoded_bytes) = general_purpose::STANDARD.decode(encoded) {
                     if let Ok(credentials) = String::from_utf8(decoded_bytes) {
                         let parts: Vec<&str> = credentials.splitn(2, ':').collect();
@@ -224,11 +209,6 @@ async fn authenticate_client(
                 }
             }
         }
-    }
-
-    // 尝试从表单数据获取客户端凭据
-    if let Some(Form(creds)) = form {
-        return Ok((creds.client_id, creds.client_secret));
     }
 
     Err(AuthError::Unauthorized("Missing client credentials".to_string()))

@@ -291,6 +291,7 @@ DEFINE INDEX group_collab_run_thread_idx ON group_collab_run COLUMNS thread_id, 
 DEFINE TABLE oidc_client SCHEMAFULL;
 DEFINE FIELD client_id ON oidc_client TYPE string;
 DEFINE FIELD client_secret_hash ON oidc_client TYPE string;
+DEFINE FIELD subject_id ON oidc_client TYPE option<record<subject>>;
 DEFINE FIELD client_name ON oidc_client TYPE string;
 DEFINE FIELD client_type ON oidc_client TYPE string; -- public, confidential
 DEFINE FIELD redirect_uris ON oidc_client TYPE array;
@@ -330,7 +331,9 @@ DEFINE TABLE oidc_access_token SCHEMAFULL;
 DEFINE FIELD token ON oidc_access_token TYPE string;
 DEFINE FIELD token_type ON oidc_access_token TYPE string DEFAULT "Bearer";
 DEFINE FIELD client_id ON oidc_access_token TYPE string;
-DEFINE FIELD user_id ON oidc_access_token TYPE record<user>;
+DEFINE FIELD subject_id ON oidc_access_token TYPE record<subject>;
+DEFINE FIELD subject_type ON oidc_access_token TYPE string;
+DEFINE FIELD user_id ON oidc_access_token TYPE option<record<user>>;
 DEFINE FIELD scope ON oidc_access_token TYPE string;
 DEFINE FIELD expires_at ON oidc_access_token TYPE number;
 DEFINE FIELD created_at ON oidc_access_token TYPE number;
@@ -341,7 +344,9 @@ DEFINE INDEX oidc_access_token_expiry_idx ON oidc_access_token COLUMNS expires_a
 DEFINE TABLE oidc_refresh_token SCHEMAFULL;
 DEFINE FIELD token ON oidc_refresh_token TYPE string;
 DEFINE FIELD client_id ON oidc_refresh_token TYPE string;
-DEFINE FIELD user_id ON oidc_refresh_token TYPE record<user>;
+DEFINE FIELD subject_id ON oidc_refresh_token TYPE record<subject>;
+DEFINE FIELD subject_type ON oidc_refresh_token TYPE string;
+DEFINE FIELD user_id ON oidc_refresh_token TYPE option<record<user>>;
 DEFINE FIELD access_token ON oidc_refresh_token TYPE string; -- 关联的访问令牌
 DEFINE FIELD scope ON oidc_refresh_token TYPE string;
 DEFINE FIELD used ON oidc_refresh_token TYPE bool DEFAULT false;

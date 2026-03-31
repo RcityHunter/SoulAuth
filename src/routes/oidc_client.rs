@@ -109,6 +109,7 @@ async fn get_client(
         Ok(client) => {
             let response = OidcClientResponse {
                 client_id: client.client_id,
+                subject_id: client.subject_id,
                 client_secret: "***".to_string(), // 不返回密钥
                 client_name: client.client_name,
                 client_type: client.client_type,

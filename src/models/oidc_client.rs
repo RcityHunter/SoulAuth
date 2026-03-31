@@ -7,6 +7,7 @@ use surrealdb::types::SurrealValue;
 pub struct OidcClient {
     pub id: Option<String>,
     pub client_id: String,
+    pub subject_id: Option<String>,
     pub client_secret_hash: String,
     pub client_name: String,
     pub client_type: ClientType,
@@ -70,6 +71,7 @@ pub struct CreateOidcClientRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OidcClientResponse {
     pub client_id: String,
+    pub subject_id: Option<String>,
     pub client_secret: String, // 只在创建时返回
     pub client_name: String,
     pub client_type: ClientType,
