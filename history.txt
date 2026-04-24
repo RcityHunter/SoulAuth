@@ -18,7 +18,7 @@ DEFINE FIELD user_agent ON sso_session TYPE string;
 DEFINE INDEX sso_session_id_idx ON sso_session COLUMNS session_id UNIQUE;
 DEFINE INDEX sso_session_user_idx ON sso_session COLUMNS user_id;
 DEFINE INDEX sso_session_expiry_idx ON sso_session COLUMNS expires_at;
--- Rust Auth System Initial Data
+-- SoulAuth Initial Data
 -- 运行此文件以创建系统角色和权限的初始数据
 -- 创建系统权限
 -- 用户管理权限

@@ -1,5 +1,5 @@
 -- Rainbow-Docs 权限扩展
--- 为 Rainbow-Auth 系统添加文档管理相关权限
+-- 为 SoulAuth 系统添加文档管理相关权限
 -- 在执行 initial_data.sql 之后运行此文件
 
 -- 文档管理权限

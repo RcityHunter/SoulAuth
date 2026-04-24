@@ -1,4 +1,4 @@
--- Rust Auth System Database Schema
+-- SoulAuth Database Schema
 -- 运行此文件以创建所有必需的数据库表和索引
 
 -- 主体表

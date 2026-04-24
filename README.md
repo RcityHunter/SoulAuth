@@ -1,4 +1,4 @@
-# Rust Auth System
+# SoulAuth
 
 一个使用 Rust 构建的现代化认证系统，支持多种认证方式和用户管理功能。
 
@@ -145,8 +145,8 @@
 
 1. 克隆项目
 ```bash
-git clone https://github.com/yourusername/rust-auth.git
-cd rust-auth
+git clone https://github.com/RcityHunter/SoulAuth.git
+cd SoulAuth
 ```
 
 2. 配置环境变量

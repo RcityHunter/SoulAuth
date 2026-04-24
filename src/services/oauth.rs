@@ -223,7 +223,7 @@ impl OAuthService {
         let user_info: GitHubUserInfo = client
             .get("https://api.github.com/user")
             .bearer_auth(token.access_token().secret())
-            .header("User-Agent", "rust-auth-system")
+            .header("User-Agent", "soulauth-system")
             .send()
             .await
             .map_err(|e| AuthError::OAuthError(e.to_string()))?
@@ -235,7 +235,7 @@ impl OAuthService {
         let emails: Vec<GitHubEmail> = client
             .get("https://api.github.com/user/emails")
             .bearer_auth(token.access_token().secret())
-            .header("User-Agent", "rust-auth-system")
+            .header("User-Agent", "soulauth-system")
             .send()
             .await
             .map_err(|e| AuthError::OAuthError(e.to_string()))?

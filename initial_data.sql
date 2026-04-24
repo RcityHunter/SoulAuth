@@ -1,4 +1,4 @@
--- Rust Auth System Initial Data
+-- SoulAuth Initial Data
 -- 运行此文件以创建系统角色和权限的初始数据
 
 -- 创建系统权限

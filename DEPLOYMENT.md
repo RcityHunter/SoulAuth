@@ -1,6 +1,6 @@
-# Rust Auth System 部署指南
+# SoulAuth 部署指南
 
-本文档说明如何正确部署 Rust Auth System 到生产环境。
+本文档说明如何正确部署 SoulAuth 到生产环境。
 
 ## 数据库部署
 
@@ -178,7 +178,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON auth.* TO app_user;
 
 3. **启动应用程序**：
    ```bash
-   ./target/release/rust-auth
+   ./target/release/soulauth
    ```
 
 4. **验证部署**：
@@ -263,4 +263,4 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON auth.* TO app_user;
    - 验证连接字符串
    - 确认网络连通性
 
-通过遵循这个部署指南，您可以安全、可靠地部署Rust Auth System到生产环境。
+通过遵循这个部署指南，您可以安全、可靠地部署SoulAuth到生产环境。

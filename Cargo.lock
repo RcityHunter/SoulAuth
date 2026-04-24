@@ -4076,44 +4076,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-auth"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "async-trait",
- "axum 0.6.20",
- "base32 0.4.0",
- "base64 0.21.7",
- "chrono",
- "config",
- "dotenv",
- "jsonwebtoken 8.3.0",
- "lettre",
- "oauth2",
- "qrcode",
- "rand 0.8.5",
- "reqwest 0.11.27",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sha2",
- "surrealdb",
- "surrealdb-types",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "totp-rs",
- "tower 0.4.13",
- "tower-http 0.4.4",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
- "validator",
-]
-
-[[package]]
 name = "rust-ini"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4628,6 +4590,44 @@ checksum = "86f4aa3ad99f2088c990dfa82d367e19cb29268ed67c574d10d0a4bfe71f07e0"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "soulauth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "axum 0.6.20",
+ "base32 0.4.0",
+ "base64 0.21.7",
+ "chrono",
+ "config",
+ "dotenv",
+ "jsonwebtoken 8.3.0",
+ "lettre",
+ "oauth2",
+ "qrcode",
+ "rand 0.8.5",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2",
+ "surrealdb",
+ "surrealdb-types",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "totp-rs",
+ "tower 0.4.13",
+ "tower-http 0.4.4",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+ "validator",
 ]
 
 [[package]]
