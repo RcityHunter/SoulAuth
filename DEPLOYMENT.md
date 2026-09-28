@@ -552,9 +552,14 @@ export NO_PROXY=127.0.0.1,localhost,${DB_HOST}
 
 1. **启动 SurrealDB** 并确认可达：
    ```bash
-   surreal start --bind 127.0.0.1:8000 --user root --pass "$DB_PASS" file:/var/lib/surrealdb
+   surreal start --bind 127.0.0.1:8000 --user root --pass "$DB_PASS" rocksdb:/var/lib/surrealdb
    curl -f http://127.0.0.1:8000/health && echo " SurrealDB OK"
    ```
+
+   > ⚠ **不是 `file:`。**（2026-09-28 更正）`file:` 在 SurrealDB 3.x 上已经没有了，
+   > 照旧写法启动会直接 exit 1：`Unable to load the specified datastore`。
+   > 本节此前给的正是 `file:/var/lib/surrealdb`，而 `docker-compose.yml` 里也是同一处错——
+   > 那套栈因此**从来没有持久化过**（卷是空的，没人发现是因为它同时还坏在别处）。
 
 2. **准备环境变量**。四项必填，生产环境再加两项（见 §1）：
    ```bash
