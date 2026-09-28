@@ -30,17 +30,43 @@ name: soulauth
 
 services:
   surrealdb:
-    image: surrealdb/surrealdb:v3.2.4
+    # ⚠ **钉 v3.0.5,不要跟着 latest 走。**(2026-09-28)
+    #
+    # 此前是 v3.2.4,而本仓的客户端 crate 是 `surrealdb = "3.0.0"` —— 跨了两个小版本。
+    # 后果是实测出来的,不是推测:
+    #
+    #   · 该服务端**所有请求返 `Method not allowed`**,连容器自带的
+    #     `/surreal isready` 连自己都一样(对照:v3.0.5 同一条命令返 OK)
+    #   · 健康探针自 2026-09-16 启动起**失败 11594 次** —— 不是抓发,是从第一天就不应
+    #   · soulauth 启动时建立的那条长连接撑了十天,断了之后**重连再也上不去**
+    #
+    # ▎对外表现是 `/api/auth/login` 返 `service_unavailable` ——
+    #   **看着像「服务忙」,而真实原因是版本歪。** 那一躺就是十二天。
+    #
+    # 升级前先把客户端 crate 一起升,并在本机验一次 `isready`。
+    image: surrealdb/surrealdb:v3.0.5
+    # ⚠ **`user: 0:0` 不是偷懒,是这台机器上唯一能持久化的走法。**(2026-09-28)
+    #
+    # 镜像跑的是 UID 65532,而 compose 新建的具名卷是 `0:0 755` ——
+    # 于是 surreal 建不了库目录:`Failed to create RocksDB directory: PermissionDenied`。
+    # 常规解法是先起个 init 容器 chown 一遍,**在 Docker Desktop for Windows 上不成立**:
+    # 实测 chown 在容器内生效,换个容器再 stat 又变回 `0:0` —— 该卷后端不保留属主。
+    # 所以只能让 surreal 以 root 跑。生产上换成属主正确的 bind mount 或 K8s fsGroup。
+    user: "0:0"
     command:
       - start
       - --bind=0.0.0.0:8000
       - --user=root
       - --pass=root
-      - file:/data/soulauth.db
+      # ⚠ **不是 `file:`。**`file:` 在 SurrealDB 3.x 上已经不存在了 ——
+      # v3.0.5 启动直接 exit 1:`Unable to load the specified datastore`。
+      # 原先这里写的正是 `file:/data/soulauth.db`,所以这套栈**从来没有持久化过**:
+      # 拆栈前查过那个卷,是空的。
+      - rocksdb:/data/soulauth.db
     volumes:
       - surreal-data:/data
     healthcheck:
-      # 用 CLI 自带的探针：这个镜像里没有 curl，也没有 shell 之外的工具。
+      # 用 CLI 自带的探针：这个镜像是 scratch 底，连 /bin/sh 都没有，更没有 curl。
       test: ["CMD", "/surreal", "isready", "--endpoint", "http://127.0.0.1:8000"]
       interval: 5s
       timeout: 3s
@@ -51,40 +77,61 @@ services:
   #
   # 用 SurrealDB 官方镜像而不是在应用里做运行期 DDL —— 认证服务不应该拥有
   # 改自己表结构的权限，那条边界在 DEPLOYMENT.md 里已经定了。
+  #
+  # ⚠ **不要给它包 shell。**(2026-09-28)
+  #
+  # 此前这里是 `entrypoint: ["/bin/sh","-c"]` 加一段「先探测 role:admin 再决定导不导」
+  # 的条件脚本。**这个镜像里没有 /bin/sh** —— 容器状态永远停在 `Created`,exit 127,
+  # `stat /bin/sh: no such file or directory`。而 soulauth 依赖它
+  # `service_completed_successfully`,于是 `docker compose up` **从来就拉不起这套栈**;
+  # 现网那套是手起的。
+  #
+  # ▎那段脚本要防的事**不存在**。实测(v3.0.5,本机,2026-09-28):
+  #   · `/surreal import` 在已初始化的库上重跑 → `Import executed with no errors`,rc=0
+  #   · schema.sql 连导 4 次、initial_data.sql 连导 2 次,全 rc=0,role 表仍是 5 行、不翻倍
+  #   · 全新库上 CLI import 会自己建 namespace/database
+  #     (对照:HTTP `/import` **不会**,返 `The namespace 'auth' does not exist`)
+  #   原注释说「195 条 DEFINE 只有 8 条带 IF NOT EXISTS,重跑会报 already exists 而退出非零」——
+  #   条数也不对(实为 262 条 DEFINE、8 条 IF NOT EXISTS),结论更不对:import 不因此失败。
+  #
+  # 所以无条件导入即可:不需要 shell,不需要判据,拆成两个服务串起来。
+  #
+  # ▎`--endpoint` 不是 `--conn`:后者是 SurrealDB 2.x 之前的写法,3.x 上报错且不提示。
   schema-init:
-    image: surrealdb/surrealdb:v3.2.4
+    image: surrealdb/surrealdb:v3.0.5
     depends_on:
       surrealdb:
         condition: service_healthy
     volumes:
       - ./schema.sql:/sql/schema.sql:ro
-      - ./initial_data.sql:/sql/initial_data.sql:ro
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: ["/surreal"]
     command:
-      # 先探测再导入。
-      #
-      # schema.sql 里 195 条 DEFINE 只有 8 条带 IF NOT EXISTS，在已经初始化过的
-      # 库上重跑会报 "already exists" 而退出非零 —— 而下游的
-      # service_completed_successfully 会因此让每次重启后的 soulauth 都起不来。
-      # 所以这里不能无条件导入。
-      #
-      # 判据用种子里的 role:admin，与应用启动时 ensure_schema_initialised 的
-      # 判据一致：它同时覆盖「schema 没导」与「导错了 ns/db」两种失败。
-      #
-      # 注意参数是 --endpoint 而不是 --conn：后者是 SurrealDB 2.x 之前的写法，
-      # 在 3.x 上会报一句没什么帮助的错。
-      - |
-        set -e
-        SQL="--endpoint http://surrealdb:8000 --user root --pass root --namespace auth --database main"
-        if echo 'SELECT VALUE id FROM role:admin;' \
-             | /surreal sql $$SQL --json 2>/dev/null | grep -q 'role:admin'; then
-          echo "schema already present in auth/main; skipping import"
-          exit 0
-        fi
-        for f in schema initial_data; do
-          /surreal import $$SQL "/sql/$${f}.sql"
-        done
-        echo "schema and seed data imported into auth/main"
+      - import
+      - --endpoint=http://surrealdb:8000
+      - --user=root
+      - --pass=root
+      - --namespace=auth
+      - --database=main
+      - /sql/schema.sql
+    restart: "no"
+
+  # 种子数据单独一步：compose 的 command 只能带一条命令，而没有 shell 串不起两个文件。
+  seed-init:
+    image: surrealdb/surrealdb:v3.0.5
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./initial_data.sql:/sql/initial_data.sql:ro
+    entrypoint: ["/surreal"]
+    command:
+      - import
+      - --endpoint=http://surrealdb:8000
+      - --user=root
+      - --pass=root
+      - --namespace=auth
+      - --database=main
+      - /sql/initial_data.sql
     restart: "no"
 
   soulauth:
@@ -92,7 +139,7 @@ services:
       context: .
       dockerfile: Dockerfile
     depends_on:
-      schema-init:
+      seed-init:
         condition: service_completed_successfully
     env_file:
       - .env
