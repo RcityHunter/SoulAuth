@@ -280,14 +280,20 @@ impl OidcClientService {
         let query = "UPDATE oidc_client SET is_active = false, updated_at = $updated_at \
                      WHERE client_id = $client_id RETURN VALUE client_id";
 
+        // ⚠ 走 `raw_query` 而不是 `db.client` —— 后者是长连接,它的 root 令牌会过期
+        // (SurrealDB 根令牌约一小时),而裸用它**没有任何重试**:到点之后写操作
+        // 一律 401,表现成 500。`raw_query` 撞 401 会换 fresh client 重来。
         let mut response = self
             .db
-            .client
-            .query(query)
-            .bind(("client_id", client_id.to_owned()))
-            .bind(("updated_at", Utc::now().timestamp()))
-            .await?
-            .check()?;
+            .raw_query(
+                "oidc_client.disable",
+                query,
+                serde_json::json!({
+                    "client_id": client_id,
+                    "updated_at": Utc::now().timestamp(),
+                }),
+            )
+            .await?;
 
         let updated: Vec<String> = response.take(0)?;
         if updated.is_empty() {
@@ -310,15 +316,19 @@ impl OidcClientService {
         let query = "UPDATE oidc_client SET client_secret_hash = $hash, updated_at = $updated_at \
                      WHERE client_id = $client_id RETURN VALUE client_id";
 
+        // 同上:长连接令牌过期后裸查询必 401,见 `disable_client` 那条注释。
         let mut response = self
             .db
-            .client
-            .query(query)
-            .bind(("hash", client_secret_hash))
-            .bind(("client_id", client_id.to_owned()))
-            .bind(("updated_at", Utc::now().timestamp()))
-            .await?
-            .check()?;
+            .raw_query(
+                "oidc_client.regenerate_secret",
+                query,
+                serde_json::json!({
+                    "hash": client_secret_hash,
+                    "client_id": client_id,
+                    "updated_at": Utc::now().timestamp(),
+                }),
+            )
+            .await?;
 
         let updated: Vec<String> = response.take(0)?;
         if updated.is_empty() {
@@ -352,39 +362,39 @@ impl OidcClientService {
             }
         "#;
 
+        // ⚠ 走 `raw_query`,不是 `db.client`。这是本函数的**阻塞 bug**:
+        // 长连接的 root 令牌约一小时过期,裸用它没有任何重试,于是进程跑够一小时
+        // 之后「建 OIDC 客户端」一律 500(日志里是 `401 Unauthorized for .../rpc`)。
+        // 读路径看不出来 —— `create_record` / `find_record_by_field` 那几个包装
+        // 自带 401 重试,只有裸查询会撞上。`raw_query` 撞 401 会换 fresh client 重来。
+        //
+        // 它同时保留了原先 `.check()` 的作用:`raw_query` 内部已经 `response.check()`,
+        // 所以「请求送到了但语句失败」仍然会报错,不会表现成「已保存而库里没变」。
         self.db
-            .client
-            .query(query)
-            .bind(("client_id", client.client_id.clone()))
-            .bind(("client_secret_hash", client.client_secret_hash.clone()))
-            .bind(("client_name", client.client_name.clone()))
-            .bind(("client_type", client_type_value(&client.client_type)))
-            .bind(("redirect_uris", client.redirect_uris.clone()))
-            .bind((
-                "post_logout_redirect_uris",
-                client.post_logout_redirect_uris.clone(),
-            ))
-            .bind(("allowed_scopes", client.allowed_scopes.clone()))
-            .bind((
-                "allowed_grant_types",
-                grant_type_values(&client.allowed_grant_types),
-            ))
-            .bind((
-                "allowed_response_types",
-                response_type_values(&client.allowed_response_types),
-            ))
-            .bind(("require_pkce", client.require_pkce))
-            .bind(("access_token_lifetime", client.access_token_lifetime))
-            .bind(("refresh_token_lifetime", client.refresh_token_lifetime))
-            .bind(("id_token_lifetime", client.id_token_lifetime))
-            .bind(("is_active", client.is_active))
-            .bind(("created_by", client.created_by.clone()))
-            .bind(("created_at", client.created_at))
-            .bind(("updated_at", client.updated_at))
-            .await?
-            // `query().await` 只代表请求送到了，语句本身的错误藏在 Response 里。
-            // 不 check 的话，写失败也会一路返回 Ok —— 管理员看到"已保存"，库里没变。
-            .check()?;
+            .raw_query(
+                "oidc_client.save",
+                query,
+                serde_json::json!({
+                    "client_id": client.client_id,
+                    "client_secret_hash": client.client_secret_hash,
+                    "client_name": client.client_name,
+                    "client_type": client_type_value(&client.client_type),
+                    "redirect_uris": client.redirect_uris,
+                    "post_logout_redirect_uris": client.post_logout_redirect_uris,
+                    "allowed_scopes": client.allowed_scopes,
+                    "allowed_grant_types": grant_type_values(&client.allowed_grant_types),
+                    "allowed_response_types": response_type_values(&client.allowed_response_types),
+                    "require_pkce": client.require_pkce,
+                    "access_token_lifetime": client.access_token_lifetime,
+                    "refresh_token_lifetime": client.refresh_token_lifetime,
+                    "id_token_lifetime": client.id_token_lifetime,
+                    "is_active": client.is_active,
+                    "created_by": client.created_by,
+                    "created_at": client.created_at,
+                    "updated_at": client.updated_at,
+                }),
+            )
+            .await?;
 
         Ok(())
     }
@@ -408,35 +418,30 @@ impl OidcClientService {
             WHERE client_id = $client_id
         "#;
 
+        // 同 `save_client`:走 `raw_query`,否则长连接令牌过期后更新一律 401。
+        // `raw_query` 内部已 `response.check()`,原先那条「不 check 会假成功」的
+        // 保护仍在。
         self.db
-            .client
-            .query(query)
-            .bind(("client_id", client.client_id.clone()))
-            .bind(("client_name", client.client_name.clone()))
-            .bind(("client_type", client_type_value(&client.client_type)))
-            .bind(("redirect_uris", client.redirect_uris.clone()))
-            .bind((
-                "post_logout_redirect_uris",
-                client.post_logout_redirect_uris.clone(),
-            ))
-            .bind(("allowed_scopes", client.allowed_scopes.clone()))
-            .bind((
-                "allowed_grant_types",
-                grant_type_values(&client.allowed_grant_types),
-            ))
-            .bind((
-                "allowed_response_types",
-                response_type_values(&client.allowed_response_types),
-            ))
-            .bind(("require_pkce", client.require_pkce))
-            .bind(("access_token_lifetime", client.access_token_lifetime))
-            .bind(("refresh_token_lifetime", client.refresh_token_lifetime))
-            .bind(("id_token_lifetime", client.id_token_lifetime))
-            .bind(("updated_at", client.updated_at))
-            .await?
-            // `query().await` 只代表请求送到了，语句本身的错误藏在 Response 里。
-            // 不 check 的话，写失败也会一路返回 Ok —— 管理员看到"已保存"，库里没变。
-            .check()?;
+            .raw_query(
+                "oidc_client.update",
+                query,
+                serde_json::json!({
+                    "client_id": client.client_id,
+                    "client_name": client.client_name,
+                    "client_type": client_type_value(&client.client_type),
+                    "redirect_uris": client.redirect_uris,
+                    "post_logout_redirect_uris": client.post_logout_redirect_uris,
+                    "allowed_scopes": client.allowed_scopes,
+                    "allowed_grant_types": grant_type_values(&client.allowed_grant_types),
+                    "allowed_response_types": response_type_values(&client.allowed_response_types),
+                    "require_pkce": client.require_pkce,
+                    "access_token_lifetime": client.access_token_lifetime,
+                    "refresh_token_lifetime": client.refresh_token_lifetime,
+                    "id_token_lifetime": client.id_token_lifetime,
+                    "updated_at": client.updated_at,
+                }),
+            )
+            .await?;
 
         Ok(())
     }
