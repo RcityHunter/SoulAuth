@@ -67,7 +67,29 @@ import_sql initial_data.sql
 step 5 "启动应用程序"
 ( cd "$ROOT"; RUST_LOG=soulauth=warn exec ./target/debug/soulauth ) > "$WORK/app.log" 2>&1 &
 AP_PID=$!; disown $AP_PID
-for i in $(seq 30); do curl -sSf -o /dev/null --max-time 2 "http://127.0.0.1:${AP}/health" 2>/dev/null && break; sleep 0.5; done
+# ⚠ **这里曾是 `seq 30`(= 15 秒),而它不够。**(2026-10-07)
+#
+# 启动耗时几乎全花在一件事上:没有配 `OIDC_RSA_PRIVATE_KEY_PEM` / `_PATH` 时
+# 进程**现生成一枚临时 RSA 密钥**(启动日志里那条 warn 就是它)。
+# 放开 `RUST_LOG=debug` 逐行量过,整条启动链上只有这一处 ≥1 秒,其余全在亚秒级。
+#
+# 而 RSA 生成是**找素数**,耗时天然有方差。本机同一个 debug 二进制连跑 6 次,
+# 「Server listening」的耗时:
+#
+#     6.05s · 8.83s · 5.73s · 7.59s · 5.13s · 6.64s      中位 ~6.3s,跨度 1.7 倍
+#
+# 本机中位就 6.3 秒,CI runner 的 CPU 更弱 —— 15 秒的预算正好压在边缘上,
+# 于是它**不是必然失败,而是间歇失败**;而间歇失败最后一定被当成「又抖了一下」。
+#
+# ▎对照同一轮 CI 里**通过**的 `integration.sh`:它的 `wait_for` 是
+#   `n < 40`(= 20 秒),且判据是 `http_code != "000"`(任何 HTTP 响应都算就绪)。
+#   本脚本两个轴都更严(15 秒 + `-sSf` 只认 2xx)—— 差别只在耐心,不在被测内容。
+#
+# 所以这里给到 60 秒。它不改变本脚本证明的任何事:
+# 「照文档能不能从零部署到拿到一个可用的管理员」与启动快不快无关。
+# ⚠ 不要改成预置一枚持久密钥来「加速」—— 那会让脚本偏离 DEPLOYMENT.md §3 的步骤,
+#   而本脚本存在的全部意义就是照那份文档走。
+for i in $(seq 120); do curl -sSf -o /dev/null --max-time 2 "http://127.0.0.1:${AP}/health" 2>/dev/null && break; sleep 0.5; done
 
 step 6 "验证部署 curl /health"
 H=$(curl -sSf --max-time 5 "http://127.0.0.1:${AP}/health" 2>/dev/null)

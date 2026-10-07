@@ -44,7 +44,19 @@ services:
     #   **看着像「服务忙」,而真实原因是版本歪。** 那一躺就是十二天。
     #
     # 升级前先把客户端 crate 一起升,并在本机验一次 `isready`。
-    image: surrealdb/surrealdb:v3.0.5
+    #
+    # ============================ 2026-10-07:v3.0.5 → v3.3.0 ============================
+    #
+    # **照上面那条指令做的**:客户端 crate 同刀升到 `=3.3.0`(见 `Cargo.toml`),
+    # 不是只动镜像。上一次事故的成因是客户端 3.0.0 对服务端 3.2.4 ——
+    # 只升一边就是把同一个错配换个方向重演。
+    #
+    # ⚠ **本文件里有三处镜像,都要改**:本服务、`schema-init`、`seed-init`。
+    #   后两个用同一镜像跑 `/surreal import` —— 版本歪了会用不同的解析器导入 schema,
+    #   而那种歪不会在启动时报错,只会让某些语句的语义悄悄不同。
+    #
+    # 本机取证(`isready` + Quickstart 全程)见本次 PR。
+    image: surrealdb/surrealdb:v3.3.0
     # ⚠ **`user: 0:0` 不是偷懒,是这台机器上唯一能持久化的走法。**(2026-09-28)
     #
     # 镜像跑的是 UID 65532,而 compose 新建的具名卷是 `0:0 755` ——
@@ -98,7 +110,7 @@ services:
   #
   # ▎`--endpoint` 不是 `--conn`:后者是 SurrealDB 2.x 之前的写法,3.x 上报错且不提示。
   schema-init:
-    image: surrealdb/surrealdb:v3.0.5
+    image: surrealdb/surrealdb:v3.3.0
     depends_on:
       surrealdb:
         condition: service_healthy
@@ -117,7 +129,7 @@ services:
 
   # 种子数据单独一步：compose 的 command 只能带一条命令，而没有 shell 串不起两个文件。
   seed-init:
-    image: surrealdb/surrealdb:v3.0.5
+    image: surrealdb/surrealdb:v3.3.0
     depends_on:
       schema-init:
         condition: service_completed_successfully

@@ -63,7 +63,24 @@ jobs:
       # 升级时改这一处，并把 tests/integration.sh 与 docker-compose.yml 一起跑过。
       - name: Install SurrealDB
         env:
-          SURREAL_VERSION: v3.2.4
+          # ⚠ **2026-10-07:v3.2.4 → v3.3.0,与客户端 crate 同刀。**
+          #
+          # 这是本仓**第四处** SurrealDB 版本来源(另三处是 docker-compose.yml 里
+          # surrealdb / schema-init / seed-init 的镜像)。它装的是**原生**二进制,
+          # 给 tests/integration.sh 与 tests/deployment_walkthrough.sh 用。
+          #
+          # ▎这一处是本轮升级里**被 CI 抓出来的**,不是事先想到的:
+          #   只改了三处镜像与客户端之后,`check·clippy·test` 与
+          #   `docker compose` 两个 job 都 pass,而本 job 的 walkthrough
+          #   在「步骤 6 验证部署 curl /health」无响应 —— 应用起不来。
+          #
+          #   对照很干净:
+          #     客户端 3.0.0 + 原生 v3.2.4  → integration pass(main,2026-10-05)
+          #     客户端 3.3.0 + 原生 v3.2.4  → integration fail(升级 PR)
+          #
+          #   也就是说「客户端与服务端必须同版」这条,在本仓是**实测**成立的,
+          #   不只是 docker-compose.yml 注释里那段 2026-09-28 的历史记录。
+          SURREAL_VERSION: v3.3.0
         run: |
           curl -sSf https://install.surrealdb.com | sh -s -- --version "$SURREAL_VERSION"
           echo "$HOME/.surrealdb" >> "$GITHUB_PATH"
