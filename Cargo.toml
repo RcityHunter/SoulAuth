@@ -2,6 +2,12 @@
 name = "soulauth"
 version = "0.1.0"
 edition = "2021"
+# ⚠ **1.95 是被 surrealdb 3.3.0 顶上来的,不是我们想用新 API。**
+# `surrealdb-common-3.3.0` 用 `std::hint::cold_path()`(1.95.0 才稳定),
+# 且它自己声明 `edition = "2024"`(要 1.85+)而**没有 rust-version** ——
+# 所以这个下界不会经 cargo 报出来,只会由 rustc 直接拒。
+# 钉工具链见 `rust-toolchain.toml`;两件事分工不同,都要有。
+rust-version = "1.95"
 description = "An authentication service in Rust: accounts, credentials, sessions, and an OpenID Connect provider."
 repository = "https://github.com/RcityHarold/SoulAuth"
 license = "Apache-2.0"
@@ -19,8 +25,8 @@ tokio = { version = "1.28", features = ["full"] }
 # 数据库
 reqwest = { version = "0.13", features = ["json"] }
 base64 = "0.21"
-surrealdb = { version = "3.0.0", features = ["protocol-http"] }
-surrealdb-types = "3.0.0"
+surrealdb = { version = "=3.3.0", features = ["protocol-http"] }
+surrealdb-types = "=3.3.0"
 
 # 认证相关
 jsonwebtoken = "8.3"

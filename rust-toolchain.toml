@@ -1,0 +1,23 @@
+# ================= 为什么本仓需要这个文件 =================
+#
+# **2026-10-07 新增,随 surrealdb 3.0.0 → 3.3.0 同刀。**
+#
+# `surrealdb-common-3.3.0/src/future/stream.rs:64` 用 `std::hint::cold_path()`
+# —— 该 API **Rust 1.95.0 才稳定**;且该 crate 声明 `edition = "2024"`(要 1.85+)。
+# 用低于 1.95 的工具链编本仓,**报错在依赖内部**,看起来像 surrealdb 坏了。
+#
+# ⚠ **钉工具链 ≠ 声明 MSRV,两件事都要有:**
+#   · 本文件         = 「**我**用哪个编译器编」—— 保证本仓构建可复现
+#   · `rust-version` = 「**下游至少**要哪个」—— 见 Cargo.toml 那一行
+#
+# ⚠ 此前 CI 用 `dtolnay/rust-toolchain@stable`。**`stable` 不是钉子** ——
+# 它是「跑的人机器上的 stable 是什么就是什么」,不同人 rustup 更新时间不同,
+# 于是同一份代码走的是不同的 lint 集。本文件是 per-directory 的、会覆盖那一步装的版本。
+#
+# 与生态内三个仓同版本:SoulSeedOS / SoulSeed-AGI / soul-base 钉的都是 1.95.0。
+#
+# ⚠ **不是升到最新(本机 1.98.1),是升到够用的最低版。**
+# 工具链每往前一步就换一批 lint,而多出来的那批与 surrealdb 这件事无关。
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
