@@ -11,6 +11,22 @@ env:
 # 注意：不要把 `-D warnings` 放进全局 RUSTFLAGS —— 那会连同依赖一起 deny，
 # 上游 crate 的任意一条警告都能让构建红掉。只对本 crate 生效即可（见 clippy 步骤）。
 
+# ============================ 2026-10-08 新增:取消被取代的 PR 跑批 ============================
+#
+# 本仓三个 job 里 `integration`(约 8 分钟)与 `docker`(约 5 分钟)都不便宜,
+# 而同一条 PR 上被后一次 push 取代的旧批仍在烧分钟。
+# 账号 2026-10-07 一天跑掉 937 分钟(Free 额度 2000/月),其中相当一部分是这类浪费。
+#
+# ⚠ **`cancel-in-progress` 刻意不是常量 `true`** —— 那会连 `push` 到 main 的跑批一起取消。
+#   main 上每个 commit 的绿是**证据**:后面有人问「那一刀验过吗」,只能从那次跑批来。
+#   被下一个 commit 取消掉,证据就永久没有了,而页面上只显示 `cancelled`
+#   —— 既不是绿也不是红,最容易被当成没发生。
+#
+#   所以:PR 的旧批可以取消(结论会被新批覆盖),main 的不行。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     name: check · clippy · test
