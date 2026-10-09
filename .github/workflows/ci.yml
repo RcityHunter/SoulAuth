@@ -23,8 +23,24 @@ env:
 #   —— 既不是绿也不是红,最容易被当成没发生。
 #
 #   所以:PR 的旧批可以取消(结论会被新批覆盖),main 的不行。
+#
+# ⚠⚠ **group 里 main 侧用 `github.run_id`,不是 `github.ref` —— 这一处我写错过。**
+#
+#   初版写 `github.event.pull_request.number || github.ref`。那样**所有 main push
+#   落进同一个 concurrency group**,而 `cancel-in-progress: false` 只保住
+#   **正在跑**的那一条 —— GitHub 的同组只有**一个 pending slot**,于是排队中的
+#   main run 会被后来的 main run **直接替换**。
+#
+#   后果与 `cancel-in-progress: true` 一样坏:某个已落地 commit 永久没有验证记录,
+#   而页面上只显示它被取代了。**我防住了取消,没防住顶替。**
+#
+#   `github.run_id` 对每次 run 唯一 ⇒ 每个 main run 自成一组,谁也顶不掉谁;
+#   PR 事件仍按 PR 号归组,取消语义不变。
+#
+#   出处:SoulSeedOS #531 被 close 时 Hunter 给出的判据,同一责任由 OS #530 正确实现
+#   (main `4c7b4abc`)。本仓照同一写法。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
