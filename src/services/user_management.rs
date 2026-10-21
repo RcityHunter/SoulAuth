@@ -600,8 +600,9 @@ impl UserManagementService {
 
         let now = Utc::now();
 
-        .query_with_unauthorized_retry(
-            "user_management.update_account_status",
+        self.db
+            .query_with_unauthorized_retry(
+                "user_management.update_account_status",
             {
                 let query = "UPDATE user SET account_status = $status, updated_at = $updated_at WHERE id = $user_id".to_string();
                 let bind_0 = request.status.to_string();
