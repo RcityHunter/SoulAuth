@@ -65,7 +65,7 @@ impl AuditService {
         // （实测：`time::now() >= <未来时间戳>` 返回 true。）
         let user_lockouts_query = "SELECT count() as count FROM account_lockout WHERE lockout_type = 'User' AND locked_at >= type::datetime($start_time) GROUP ALL";
         let ip_lockouts_query = "SELECT count() as count FROM account_lockout WHERE lockout_type = 'IpAddress' AND locked_at >= type::datetime($start_time) GROUP ALL";
-        let active_lockouts_query = "SELECT count() as count FROM account_lockout WHERE status = 'Locked' AND locked_until > $now GROUP ALL";
+        let active_lockouts_query = "SELECT count() as count FROM account_lockout WHERE status = 'Locked' AND locked_until > type::datetime($now) GROUP ALL";
 
         let user_lockouts = self
             .execute_count_query_since(user_lockouts_query, start_time)
@@ -76,11 +76,14 @@ impl AuditService {
 
         let mut active_result = self
             .db
-            .client
-            .query(active_lockouts_query)
-            .bind(("now", Utc::now()))
+.raw_query(
+                "audit.active_lockouts_count",
+                active_lockouts_query,
+                serde_json::json!({
+                    "now": Utc::now().to_rfc3339(),
+                }),
+            )
             .await
-            .and_then(|response| response.check())
             .map_err(|e| {
                 error!("Failed to get active lockouts count: {}", e);
                 AuthError::DatabaseError("Query execution failed".to_string())
@@ -94,14 +97,17 @@ impl AuditService {
         // Calculate average lockout duration
         let duration_query = "SELECT type::string(locked_at) AS locked_at, \
              type::string(locked_until) AS locked_until FROM account_lockout \
-             WHERE locked_at >= $start_time AND locked_until != NONE";
+             WHERE locked_at >= type::datetime($start_time) AND locked_until != NONE";
         let mut duration_result = self
             .db
-            .client
-            .query(duration_query)
-            .bind(("start_time", start_time))
+.raw_query(
+                "audit.lockout_durations",
+                duration_query,
+                serde_json::json!({
+                    "start_time": start_time.to_rfc3339(),
+                }),
+            )
             .await
-            .and_then(|response| response.check())
             .map_err(|e| {
                 error!("Failed to get lockout durations: {}", e);
                 AuthError::DatabaseError("Query execution failed".to_string())
@@ -160,11 +166,14 @@ impl AuditService {
 
         let mut result = self
             .db
-            .client
-            .query(query)
-            .bind(("start_time", start_time.timestamp()))
+.raw_query(
+                "audit.failed_login_by_ip",
+                query,
+                serde_json::json!({
+                    "start_time": start_time.timestamp(),
+                }),
+            )
             .await
-            .and_then(|response| response.check())
             .map_err(|e| {
                 error!("Failed to get failed login by IP: {}", e);
                 AuthError::DatabaseError("Query execution failed".to_string())
@@ -179,14 +188,12 @@ impl AuditService {
         let locked_ips: Vec<Value> = {
             let mut r = self
                 .db
-                .client
-                .query(
-                    "SELECT identifier FROM account_lockout \
-                     WHERE lockout_type = 'IpAddress' AND locked_until > $now",
-                )
-                .bind(("now", Utc::now()))
-                .await
-                .and_then(|response| response.check())
+.raw_query(
+                "audit.load_locked_ips",
+                "SELECT identifier FROM account_lockout WHERE lockout_type = 'IpAddress' AND locked_until > type::datetime($now)",
+                serde_json::json!({}),
+            )
+            .await
                 .map_err(|e| {
                     error!("Failed to load locked IPs: {}", e);
                     AuthError::DatabaseError("Query execution failed".to_string())
@@ -231,11 +238,14 @@ impl AuditService {
 
         let mut result = self
             .db
-            .client
-            .query(query)
-            .bind(("start_time", start_time.timestamp()))
+.raw_query(
+                "audit.suspicious_activities",
+                query,
+                serde_json::json!({
+                    "start_time": start_time.timestamp(),
+                }),
+            )
             .await
-            .and_then(|response| response.check())
             .map_err(|e| {
                 error!("Failed to get suspicious activities: {}", e);
                 AuthError::DatabaseError("Query execution failed".to_string())
@@ -280,11 +290,14 @@ impl AuditService {
         let query = "SELECT category, count() as count FROM user_activity WHERE timestamp >= $start_time GROUP BY category ORDER BY count DESC";
         let mut result = self
             .db
-            .client
-            .query(query)
-            .bind(("start_time", start_time.timestamp()))
+.raw_query(
+                "audit.activities_by_category",
+                query,
+                serde_json::json!({
+                    "start_time": start_time.timestamp(),
+                }),
+            )
             .await
-            .and_then(|response| response.check())
             .map_err(|e| {
                 error!("Failed to get activities by category: {}", e);
                 AuthError::DatabaseError("Query execution failed".to_string())
@@ -319,11 +332,14 @@ impl AuditService {
         let query = "SELECT status, count() as count FROM user_activity WHERE timestamp >= $start_time GROUP BY status ORDER BY count DESC";
         let mut result = self
             .db
-            .client
-            .query(query)
-            .bind(("start_time", start_time.timestamp()))
+.raw_query(
+                "audit.activities_by_status",
+                query,
+                serde_json::json!({
+                    "start_time": start_time.timestamp(),
+                }),
+            )
             .await
-            .and_then(|response| response.check())
             .map_err(|e| {
                 error!("Failed to get activities by status: {}", e);
                 AuthError::DatabaseError("Query execution failed".to_string())
@@ -360,11 +376,14 @@ impl AuditService {
 
         let mut result = self
             .db
-            .client
-            .query(query)
-            .bind(("start_time", start_time.timestamp()))
+.raw_query(
+                "audit.top_active_users",
+                query,
+                serde_json::json!({
+                    "start_time": start_time.timestamp(),
+                }),
+            )
             .await
-            .and_then(|response| response.check())
             .map_err(|e| {
                 error!("Failed to get top active users: {}", e);
                 AuthError::DatabaseError("Query execution failed".to_string())
@@ -411,11 +430,14 @@ impl AuditService {
             let user_query = "SELECT type::string(id) as id, email FROM user WHERE type::string(id) IN $user_ids";
             let mut user_result = self
                 .db
-                .client
-                .query(user_query)
-                .bind(("user_ids", user_keys))
-                .await
-                .and_then(|response| response.check())
+.raw_query(
+                "audit.query_user_emails",
+                user_query,
+                serde_json::json!({
+                    "user_ids": user_keys,
+                }),
+            )
+            .await
                 .map_err(|e| {
                     error!("Failed to query user emails: {}", e);
                     AuthError::DatabaseError("Query execution failed".to_string())
@@ -479,11 +501,14 @@ impl AuditService {
 
         let mut result = self
             .db
-            .client
-            .query(query)
-            .bind(("start_time", start_time.timestamp()))
+.raw_query(
+                "audit.hourly_activity_distribution",
+                query,
+                serde_json::json!({
+                    "start_time": start_time.timestamp(),
+                }),
+            )
             .await
-            .and_then(|response| response.check())
             .map_err(|e| {
                 error!("Failed to get hourly activity distribution: {}", e);
                 AuthError::DatabaseError("Query execution failed".to_string())
