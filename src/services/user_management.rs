@@ -611,7 +611,7 @@ impl UserManagementService {
                 move |client| {
                     let query = query.clone();
                     let bind_0 = bind_0.clone();
-                    let bind_1 = bind_1.clone();
+                    let bind_1 = bind_1;
                     let bind_2 = bind_2.clone();
                     async move {
                         client
