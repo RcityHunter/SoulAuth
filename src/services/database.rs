@@ -358,6 +358,39 @@ impl Database {
         }
     }
 
+    /// Execute a typed SurrealDB operation and retry it once on an authenticated fresh client
+    /// when the existing connection returns a proven authorization failure.
+    ///
+    /// The closure receives the actual Surreal client so native .bind values such as RecordId
+    /// keep their types. Do not route these operations through JSON bindings: JSON conversion
+    /// can turn record references into ordinary values and silently break identity predicates.
+    pub async fn query_with_unauthorized_retry<T, F, Fut>(
+        &self,
+        op_name: &str,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: Fn(Surreal<Client>) -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let client = if self.should_prefer_fresh() {
+            self.fresh_client().await?
+        } else {
+            self.client.clone()
+        };
+
+        match operation(client).await {
+            Ok(value) => Ok(value),
+            Err(error) if Self::is_unauthorized_error(&error) => {
+                self.mark_prefer_fresh_for(300);
+                warn!("{op_name} received an authorization failure; retrying once with a fresh client");
+                let fresh = self.fresh_client().await?;
+                operation(fresh).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub async fn new(config: &Config) -> Result<Self> {
         let mut retry_count = 0;
         let max_retries = 5;
