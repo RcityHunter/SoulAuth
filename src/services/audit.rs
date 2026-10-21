@@ -188,12 +188,12 @@ impl AuditService {
         let locked_ips: Vec<Value> = {
             let mut r = self
                 .db
-.raw_query(
-                "audit.load_locked_ips",
-                "SELECT identifier FROM account_lockout WHERE lockout_type = 'IpAddress' AND locked_until > type::datetime($now)",
-                serde_json::json!({}),
-            )
-            .await
+                .raw_query(
+                    "audit.load_locked_ips",
+                    "SELECT identifier FROM account_lockout WHERE lockout_type = 'IpAddress' AND locked_until > type::datetime($now)",
+                    serde_json::json!({ "now": Utc::now().to_rfc3339() }),
+                )
+                .await
                 .map_err(|e| {
                     error!("Failed to load locked IPs: {}", e);
                     AuthError::DatabaseError("Query execution failed".to_string())
