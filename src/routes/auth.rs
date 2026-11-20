@@ -43,7 +43,7 @@ use crate::{
         rbac::RBACService,
     },
     utils::{
-        jwt::{decode_mfa_challenge_token, AuthedUser},
+        jwt::{decode_mfa_challenge_token, AuthedUser, Claims},
         rate_limit_middleware::client_ip,
     },
     AppState,
@@ -577,6 +577,7 @@ async fn resend_verification(
 async fn get_current_user(
     Extension(db): Extension<Arc<Database>>,
     user: AuthedUser,
+    claims: Claims,
 ) -> Result<Json<UserResponse>> {
     // `From<User>` 拿不到角色表，只能把 is_admin 填成 false。前端靠这个字段决定
     // 要不要露出管理后台入口，所以这里必须真查一次 RBAC，否则管理员看到的
@@ -590,13 +591,45 @@ async fn get_current_user(
             .unwrap_or_default(),
     );
 
+    let original_subject = user
+        .0
+        .subject_id
+        .as_ref()
+        .map(crate::utils::record_id::record_id_key_to_string);
     let mut response = UserResponse::from(user.0);
     response.is_admin = RBACService::new(db)
         .check_user_role(&user_id, "admin")
         .await
         .unwrap_or(false);
 
-    Ok(Json(response))
+    Ok(Json(bind_authenticated_session(
+        response,
+        &claims,
+        original_subject.as_deref(),
+    )?))
+}
+
+/// Claims must come through the existing signature/expiry/current-session
+/// extractor; this binds its actual Session to the same authenticated account.
+fn bind_authenticated_session(
+    mut user: UserResponse,
+    claims: &Claims,
+    original_subject: Option<&str>,
+) -> Result<UserResponse> {
+    let matches_original = if let Some(subject) = claims.sub.strip_prefix("subject:") {
+        original_subject.is_some_and(|expected| {
+            crate::utils::record_id::normalize_record_id_key(subject)
+                == crate::utils::record_id::normalize_record_id_key(expected)
+        })
+    } else {
+        crate::utils::record_id::normalize_user_id(&claims.sub)
+            == crate::utils::record_id::normalize_user_id(&user.id)
+    };
+    if !matches_original {
+        return Err(AuthError::InvalidToken);
+    }
+    user.auth_session_ref = claims.session_id.clone().filter(|id| !id.is_empty());
+    Ok(user)
 }
 
 // ===== 多因素认证 =====
@@ -1256,5 +1289,72 @@ mod tests {
         assert_eq!(request.totp_code.as_deref(), Some("123456"));
         assert!(request.backup_code.is_none());
         assert!(!request.admin);
+    }
+}
+
+#[cfg(test)]
+mod authenticated_session_source_tests {
+    use super::*;
+
+    fn account() -> UserResponse {
+        serde_json::from_value(json!({"id":"test-user", "email":"test@example.invalid", "username":"test", "verified":true,
+            "membership_level":"basic", "membership_expiry":null, "created_at":"2026-11-20T00:00:00Z",
+            "has_password":true, "account_status":"Active", "last_login_at":null})).unwrap()
+    }
+    fn claims(session: Option<&str>) -> Claims {
+        Claims {
+            sub: "test-user".into(),
+            exp: 2000000000,
+            iat: 1900000000,
+            session_id: session.map(str::to_owned),
+            subject_type: None,
+        }
+    }
+    #[test]
+    fn authenticated_session_source_preserves_each_actual_session() {
+        let first =
+            bind_authenticated_session(account(), &claims(Some("session:actual-first")), None)
+                .unwrap();
+        let second =
+            bind_authenticated_session(account(), &claims(Some("session:actual-second")), None)
+                .unwrap();
+        assert_eq!(
+            first.auth_session_ref.as_deref(),
+            Some("session:actual-first")
+        );
+        assert_eq!(
+            second.auth_session_ref.as_deref(),
+            Some("session:actual-second")
+        );
+        assert_eq!(first.id, second.id);
+        assert_ne!(first.auth_session_ref, second.auth_session_ref);
+    }
+    #[test]
+    fn authenticated_session_source_accepts_only_the_original_legacy_subject_mapping() {
+        let mut legacy = claims(Some("session:legacy-actual"));
+        legacy.sub = "subject:actual-subject".into();
+        let user = bind_authenticated_session(account(), &legacy, Some("actual-subject"))
+            .expect("existing subject-to-user resolution must remain supported");
+        assert_eq!(
+            user.auth_session_ref.as_deref(),
+            Some("session:legacy-actual")
+        );
+        assert!(bind_authenticated_session(account(), &legacy, Some("other-subject")).is_err());
+        assert!(bind_authenticated_session(account(), &legacy, None).is_err());
+    }
+
+    #[test]
+    fn authenticated_session_source_never_falls_back_to_a_user_id() {
+        for session in [None, Some("")] {
+            let user = bind_authenticated_session(account(), &claims(session), None).unwrap();
+            assert!(user.auth_session_ref.is_none());
+            assert!(serde_json::to_value(user)
+                .unwrap()
+                .get("auth_session_ref")
+                .is_none());
+        }
+        let mut foreign = claims(Some("session:other"));
+        foreign.sub = "other-user".into();
+        assert!(bind_authenticated_session(account(), &foreign, None).is_err());
     }
 }
