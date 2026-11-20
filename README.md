@@ -84,11 +84,13 @@ Every endpoint returns the resource itself — there is no `{success, data, mess
 envelope. Actions that produce no resource answer `204 No Content`.
 
 ```
-GET /api/auth/me        →  200  {"id":"…","email":"…","is_admin":true}
+GET /api/auth/me        →  200  {"id":"…","email":"…","is_admin":true,"auth_session_ref":"原认证会话ID"}
 GET /api/rbac/roles     →  200  [{"name":"admin","permissions":[…]}, …]
 POST …/roles/assign     →  204  (no body)
 error                   →  4xx/5xx  {"error":"Invalid credentials"}
 ```
+
+`auth_session_ref` 只来自当前 bearer 的已验签、未过期且未吊销 Claims，与同一用户响应绑定；不会从用户 ID 或 token hash 补造。旧令牌缺少 session_id 时省略该可选字段，下游需要真实会话来源的操作应明确保持不可用。不同登录会话各自保留原始 session_id。账户和通用登录 DTO 不自动制造此来源。
 
 The OIDC endpoints (`/.well-known/openid-configuration`, `/jwks`, `/token`,
 `/userinfo`, `/authorize`) return the shapes their specs mandate — including

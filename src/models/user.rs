@@ -156,6 +156,10 @@ pub struct AuthResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {
     pub id: String,
+    /// Present only when the current authenticated endpoint binds an actual
+    /// provider Session. Generic account/login DTOs do not invent this source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_session_ref: Option<String>,
     pub email: String,
     #[serde(default)]
     pub username: String,
@@ -266,6 +270,7 @@ impl From<User> for UserResponse {
                 .as_ref()
                 .map(crate::utils::record_id::record_id_key_to_string)
                 .unwrap_or_default(),
+            auth_session_ref: None,
             email: user.email,
             username: user.username,
             is_admin: false,
