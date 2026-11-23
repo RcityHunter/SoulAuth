@@ -2970,6 +2970,9 @@
         "account_status": {
           "type": "object"
         },
+        "auth_session_ref": {
+          "type": "string"
+        },
         "created_at": {
           "type": "object"
         },

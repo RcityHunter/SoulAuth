@@ -1688,6 +1688,9 @@ components:
       properties:
         account_status:
           type: object
+        auth_session_ref:
+          type: string
+          description: Original verified session ID; omitted when a legacy token has no session_id.
         created_at:
           type: object
         email:
