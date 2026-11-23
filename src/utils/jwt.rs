@@ -5,13 +5,7 @@ use crate::{
     models::{actor_identity::ActorIdentity, subject::SubjectType, user::User},
     services::{auth_cache::AuthCache, database::Database},
 };
-use axum::{
-    async_trait,
-    extract::{FromRequestParts, TypedHeader},
-    headers::{authorization::Bearer, Authorization},
-    http::request::Parts,
-    RequestPartsExt,
-};
+use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -172,9 +166,8 @@ fn bearer_token(parts: &Parts) -> Option<String> {
 }
 
 /// 剥掉 `Bearer ` 前缀。**大小写不敏感**：RFC 7235 规定认证方案名不区分大小写，
-/// 而 `Claims` 提取器走的 `TypedHeader` 本来就是不敏感的。这里如果只认
-/// `"Bearer "`，同一个 `authorization: bearer xxx` 会在走 `AuthedUser` 的路由上
-/// 401、在走 `Claims` 的路由上通过——同一个客户端有一半接口能用。
+/// `Claims`、`AuthedUser` 与 `AuthedActor` 共用同一解析，避免同一客户端在
+/// 不同提取器上得到不同认证结果。
 pub fn strip_bearer_scheme(value: &str) -> Option<&str> {
     let (scheme, token) = value.split_once(' ')?;
     scheme.eq_ignore_ascii_case("Bearer").then_some(token)
@@ -196,13 +189,9 @@ where
     type Rejection = AuthError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self> {
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| AuthError::InvalidToken)?;
-
+        let token = bearer_token(parts).ok_or(AuthError::InvalidToken)?;
         let db = db_from_parts(parts)?;
-        decode_and_verify_token(&db, bearer.token()).await
+        decode_and_verify_token(&db, &token).await
     }
 }
 

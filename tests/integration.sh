@@ -779,6 +779,9 @@ login_token() {   # $1=邮箱 $2=密码 → 打印 access_token（拿不到则�
 TOK_A="$(login_token admin@test.local "CorrectHorse42!")"
 [ -n "$TOK_A" ] && ok "登录拿到令牌" || bad "登录拿到令牌" "$(body)"
 eq 200 "$(req GET /api/auth/me -H "Authorization: Bearer ${TOK_A}")" "令牌可用"
+AUTH_SESSION_A="$(jget auth_session_ref)"
+[ -n "$AUTH_SESSION_A" ] && ok "/me 披露真实认证会话来源" || bad "/me 披露真实认证会话来源"
+eq "$(claim "$TOK_A" session_id)" "$AUTH_SESSION_A" "/me 会话来源等于原签发会话"
 eq 200 "$(req GET /api/auth/sessions -H "Authorization: Bearer ${TOK_A}")" "可列出自己的会话"
 eq 401 "$(req GET /api/auth/sessions)" "无令牌列会话 → 401"
 
@@ -790,6 +793,15 @@ TOK_B="$(login_token admin@test.local "CorrectHorse42!")"
 TOK_C="$(login_token admin@test.local "CorrectHorse42!")"
 [ -n "$TOK_B" ] && [ -n "$TOK_C" ] && [ "$TOK_B" != "$TOK_C" ] &&
     ok "两次登录得到两个不同令牌" || bad "两次登录得到两个不同令牌" "B=${TOK_B:0:12} C=${TOK_C:0:12}"
+
+req GET /api/auth/me -H "Authorization: Bearer ${TOK_B}" > /dev/null
+AUTH_SESSION_B="$(jget auth_session_ref)"
+eq "$(claim "$TOK_B" session_id)" "$AUTH_SESSION_B" "同账户会话 B 保留原来源"
+req GET /api/auth/me -H "Authorization: Bearer ${TOK_C}" > /dev/null
+AUTH_SESSION_C="$(jget auth_session_ref)"
+eq "$(claim "$TOK_C" session_id)" "$AUTH_SESSION_C" "同账户会话 C 保留原来源"
+[ -n "$AUTH_SESSION_B" ] && [ -n "$AUTH_SESSION_C" ] && [ "$AUTH_SESSION_B" != "$AUTH_SESSION_C" ] &&
+    ok "同账户两次真实登录不合并会话来源" || bad "同账户两次真实登录不合并会话来源"
 
 eq 200 "$(req POST /api/auth/logout-all -H "Authorization: Bearer ${TOK_B}")" "全端登出返回成功"
 eq 401 "$(req GET /api/auth/me -H "Authorization: Bearer ${TOK_B}")" "发起方令牌失效"
@@ -2192,7 +2204,7 @@ printf '\n%s\n' "─────────────────────
 #
 # 所以把它写下来。加断言时把这个数一起改大，这跟文档站那份读数是同一条纪律：
 # 数字要么是跑出来的，要么就不该出现。
-MIN_PASS=353
+MIN_PASS=358
 if [ "$PASS" -lt "$MIN_PASS" ]; then
     printf '%s  通过 %d 项，少于下界 %d —— 有断言被静默跳过了\n' \
         "$(c_red 覆盖不足)" "$PASS" "$MIN_PASS"
