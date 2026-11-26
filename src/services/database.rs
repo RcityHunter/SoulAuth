@@ -9,7 +9,7 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use surrealdb::engine::remote::http::{Client, Http, Https};
+use surrealdb::engine::remote::ws::{Client, Ws, Wss};
 use surrealdb::opt::auth::Root;
 use surrealdb::types::SurrealValue;
 use surrealdb::{types::RecordId, Surreal};
@@ -70,23 +70,14 @@ impl Database {
         raw.trim().to_ascii_lowercase().starts_with("https://")
     }
 
-    /// 按 scheme 选连接器建连。
-    ///
-    /// 以前**只用 `Http`**：`endpoint_without_scheme` 先把 `https://` 剥掉，
-    /// 然后一律走明文连接器。于是配 `DATABASE_URL=https://db.internal:8000`
-    /// 的部署实际是明文连库 —— root 口令、每一条查询、所有密码哈希与会话令牌
-    /// 都在链路上裸奔，而且没有任何提示。同一个进程里 `rpc_signin_token`
-    /// 走的却是 `endpoint_with_scheme`，它是认 https 的：两套行为并存，
-    /// 说明这是疏漏而不是取舍。
-    ///
-    /// surrealdb 3.0 的 `Https` 连接器与 `Http` 共用同一个 `Client` 类型，
-    /// 所以这里只在建连这一步分派，其余代码不受影响。
+    /// Production 3.3 rejects HTTP `attach`; use its supported connection-scoped
+    /// WebSocket sessions. Preserve https -> Wss so recovery cannot drop TLS.
     async fn connect(raw: &str) -> Result<Surreal<Client>> {
         let endpoint = Self::endpoint_without_scheme(raw);
         let result = if Self::is_tls_endpoint(raw) {
-            Surreal::<Client>::new::<Https>(&endpoint).await
+            Surreal::<Client>::new::<Wss>(&endpoint).await
         } else {
-            Surreal::<Client>::new::<Http>(&endpoint).await
+            Surreal::<Client>::new::<Ws>(&endpoint).await
         };
         result.map_err(|e| AuthError::DatabaseError(format!("Failed to connect: {e}")))
     }
@@ -1063,6 +1054,45 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connect_starts_a_connection_scoped_websocket_handshake() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let request = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![0; 4096];
+            let mut used = 0;
+            while !bytes[..used].windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut bytes[used..]).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                used += n;
+                assert!(used < bytes.len(), "oversized handshake");
+            }
+            String::from_utf8(bytes[..used].to_vec()).unwrap()
+        });
+        // The peer deliberately closes instead of completing the upgrade.
+        assert!(tokio::time::timeout(
+            Duration::from_secs(5),
+            Database::connect(&format!("http://{address}"))
+        )
+        .await
+        .unwrap()
+        .is_err());
+        let request = tokio::time::timeout(Duration::from_secs(3), request)
+            .await
+            .expect("DB client never attempted the expected connection")
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(
+            request.starts_with("get /rpc http/1.1\r\n"),
+            "wrong DB endpoint"
+        );
+        assert!(request.contains("upgrade: websocket\r\n"));
+    }
 
     #[test]
     fn endpoint_without_scheme_accepts_both_forms() {
