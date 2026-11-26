@@ -71,19 +71,7 @@ impl Database {
         raw.starts_with("https://") || raw.starts_with("wss://")
     }
 
-    /// 按 scheme 选连接器建连。
-    ///
-    /// SurrealDB 3.3 的服务端 WebSocket RPC 是生产可用通道；HTTP `/rpc`
-    /// 会返回 `Method not allowed`。因此这里按 TLS 与否选择 `Ws` / `Wss`。
-    /// 以前只用 HTTP 连接器，于是数据库健康但 SoulAuth 仍会反复重启。
-    /// 配 `DATABASE_URL=https://db.internal:8000`
-    /// 的部署实际是明文连库 —— root 口令、每一条查询、所有密码哈希与会话令牌
-    /// 都在链路上裸奔，而且没有任何提示。同一个进程里 `rpc_signin_token`
-    /// 走的却是 `endpoint_with_scheme`，它是认 https 的：两套行为并存，
-    /// 说明这是疏漏而不是取舍。
-    ///
-    /// surrealdb 3.3 的 `Wss` 连接器与 `Ws` 共用同一个 `Client` 类型，
-    /// 所以这里只在建连这一步分派，其余代码不受影响。
+    /// Production 3.3 rejects HTTP `attach`; use connection-scoped WS/WSS.
     async fn connect(raw: &str) -> Result<Surreal<Client>> {
         let endpoint = Self::endpoint_without_scheme(raw);
         let result = if Self::is_tls_endpoint(raw) {
@@ -196,6 +184,7 @@ impl Database {
         let msg = err.to_string();
         msg.contains("401")
             || msg.contains("Unauthorized")
+            || msg.contains("The session has expired")
             || msg.contains("Failed to authenticate")
             || msg.contains("native signin failed")
             || msg.contains("rpc authenticate(token) failed")
@@ -353,8 +342,7 @@ impl Database {
             Ok(v) => Ok(v),
             Err(e) => {
                 // SurrealDB may return 401 when the auth token expires.
-                let msg = format!("{e}");
-                if msg.contains("401") || msg.contains("Unauthorized") {
+                if Self::is_unauthorized_error(&e) {
                     self.mark_prefer_fresh_for(300);
                     warn!("{op_name} failed with 401; caller should retry on fresh client");
                     Err(e)
@@ -1070,6 +1058,51 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connect_starts_a_connection_scoped_websocket_handshake() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let request = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![0; 4096];
+            let mut used = 0;
+            while !bytes[..used].windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut bytes[used..]).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                used += n;
+                assert!(used < bytes.len(), "oversized handshake");
+            }
+            String::from_utf8(bytes[..used].to_vec()).unwrap()
+        });
+        // The peer deliberately closes instead of completing the upgrade.
+        assert!(tokio::time::timeout(
+            Duration::from_secs(5),
+            Database::connect(&format!("http://{address}"))
+        )
+        .await
+        .unwrap()
+        .is_err());
+        let request = tokio::time::timeout(Duration::from_secs(3), request)
+            .await
+            .expect("DB client never attempted the expected connection")
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(
+            request.starts_with("get /rpc http/1.1\r\n"),
+            "wrong DB endpoint"
+        );
+        assert!(request.contains("upgrade: websocket\r\n"));
+    }
+
+    #[test]
+    fn expired_database_session_uses_fresh_authenticated_client() {
+        assert!(Database::is_unauthorized_error(&"The session has expired"));
+        assert!(!Database::is_unauthorized_error(&"Permission denied"));
+    }
 
     #[test]
     fn endpoint_without_scheme_accepts_both_forms() {
