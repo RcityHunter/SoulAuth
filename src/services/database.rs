@@ -53,25 +53,25 @@ impl Database {
             .store(Self::unix_now_secs() + seconds, Ordering::Relaxed);
     }
 
-    /// surrealdb 的 `Http` 连接器只接受 `host:port`，带上 `http://` 会被当成
-    /// 主机名解析（报 "DNS resolution failed for http:80"）。而 README 和本文件
-    /// 里的默认值一直写的是 `http://localhost:8000` —— 也就是照文档配置反而起不来。
-    /// 这里统一剥掉 scheme，两种写法都能用。
+    /// 远端连接器只接受 `host:port`。部署可以继续使用历史的 http(s) 写法，
+    /// 也可以明确写 ws(s)；这里统一剥掉 scheme。
     fn endpoint_without_scheme(raw: &str) -> String {
         let ep = raw.trim().trim_end_matches('/');
         ep.strip_prefix("http://")
             .or_else(|| ep.strip_prefix("https://"))
+            .or_else(|| ep.strip_prefix("ws://"))
+            .or_else(|| ep.strip_prefix("wss://"))
             .unwrap_or(ep)
             .to_string()
     }
 
     /// 端点是否要求 TLS。
     fn is_tls_endpoint(raw: &str) -> bool {
-        raw.trim().to_ascii_lowercase().starts_with("https://")
+        let raw = raw.trim().to_ascii_lowercase();
+        raw.starts_with("https://") || raw.starts_with("wss://")
     }
 
-    /// Production 3.3 rejects HTTP `attach`; use its supported connection-scoped
-    /// WebSocket sessions. Preserve https -> Wss so recovery cannot drop TLS.
+    /// Production 3.3 rejects HTTP `attach`; use connection-scoped WS/WSS.
     async fn connect(raw: &str) -> Result<Surreal<Client>> {
         let endpoint = Self::endpoint_without_scheme(raw);
         let result = if Self::is_tls_endpoint(raw) {
@@ -98,14 +98,18 @@ impl Database {
             || host.starts_with("[::1]");
         if !loopback {
             warn!(
-                "DATABASE_URL points at a non-loopback host over plaintext HTTP ({host});                  database credentials, password hashes and session tokens travel unencrypted.                  Use https:// (or keep the database on a private link you trust)."
+                "DATABASE_URL points at a non-loopback host over a plaintext connection ({host});                  database credentials, password hashes and session tokens travel unencrypted.                  Use wss:// (or keep the database on a private link you trust)."
             );
         }
     }
 
     fn endpoint_with_scheme(raw: &str) -> String {
         let ep = raw.trim().trim_end_matches('/');
-        if ep.starts_with("http://") || ep.starts_with("https://") {
+        if let Some(rest) = ep.strip_prefix("ws://") {
+            format!("http://{rest}")
+        } else if let Some(rest) = ep.strip_prefix("wss://") {
+            format!("https://{rest}")
+        } else if ep.starts_with("http://") || ep.starts_with("https://") {
             ep.to_string()
         } else {
             format!("http://{}", ep)
@@ -180,6 +184,7 @@ impl Database {
         let msg = err.to_string();
         msg.contains("401")
             || msg.contains("Unauthorized")
+            || msg.contains("The session has expired")
             || msg.contains("Failed to authenticate")
             || msg.contains("native signin failed")
             || msg.contains("rpc authenticate(token) failed")
@@ -337,8 +342,7 @@ impl Database {
             Ok(v) => Ok(v),
             Err(e) => {
                 // SurrealDB may return 401 when the auth token expires.
-                let msg = format!("{e}");
-                if msg.contains("401") || msg.contains("Unauthorized") {
+                if Self::is_unauthorized_error(&e) {
                     self.mark_prefer_fresh_for(300);
                     warn!("{op_name} failed with 401; caller should retry on fresh client");
                     Err(e)
@@ -1095,6 +1099,12 @@ mod tests {
     }
 
     #[test]
+    fn expired_database_session_uses_fresh_authenticated_client() {
+        assert!(Database::is_unauthorized_error(&"The session has expired"));
+        assert!(!Database::is_unauthorized_error(&"Permission denied"));
+    }
+
+    #[test]
     fn endpoint_without_scheme_accepts_both_forms() {
         assert_eq!(
             Database::endpoint_without_scheme("http://localhost:8000"),
@@ -1102,6 +1112,14 @@ mod tests {
         );
         assert_eq!(
             Database::endpoint_without_scheme("https://db.example:8000/"),
+            "db.example:8000"
+        );
+        assert_eq!(
+            Database::endpoint_without_scheme("ws://db.internal:8000"),
+            "db.internal:8000"
+        );
+        assert_eq!(
+            Database::endpoint_without_scheme("wss://db.example:8000/"),
             "db.example:8000"
         );
         assert_eq!(
@@ -1119,6 +1137,10 @@ mod tests {
         assert_eq!(
             Database::endpoint_with_scheme("https://db.example:8000/"),
             "https://db.example:8000"
+        );
+        assert_eq!(
+            Database::endpoint_with_scheme("ws://db.internal:8000"),
+            "http://db.internal:8000"
         );
     }
 
