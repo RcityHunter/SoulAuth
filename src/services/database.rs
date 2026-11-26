@@ -9,7 +9,7 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use surrealdb::engine::remote::http::{Client, Http, Https};
+use surrealdb::engine::remote::ws::{Client, Ws, Wss};
 use surrealdb::opt::auth::Root;
 use surrealdb::types::SurrealValue;
 use surrealdb::{types::RecordId, Surreal};
@@ -53,40 +53,43 @@ impl Database {
             .store(Self::unix_now_secs() + seconds, Ordering::Relaxed);
     }
 
-    /// surrealdb 的 `Http` 连接器只接受 `host:port`，带上 `http://` 会被当成
-    /// 主机名解析（报 "DNS resolution failed for http:80"）。而 README 和本文件
-    /// 里的默认值一直写的是 `http://localhost:8000` —— 也就是照文档配置反而起不来。
-    /// 这里统一剥掉 scheme，两种写法都能用。
+    /// 远端连接器只接受 `host:port`。部署可以继续使用历史的 http(s) 写法，
+    /// 也可以明确写 ws(s)；这里统一剥掉 scheme。
     fn endpoint_without_scheme(raw: &str) -> String {
         let ep = raw.trim().trim_end_matches('/');
         ep.strip_prefix("http://")
             .or_else(|| ep.strip_prefix("https://"))
+            .or_else(|| ep.strip_prefix("ws://"))
+            .or_else(|| ep.strip_prefix("wss://"))
             .unwrap_or(ep)
             .to_string()
     }
 
     /// 端点是否要求 TLS。
     fn is_tls_endpoint(raw: &str) -> bool {
-        raw.trim().to_ascii_lowercase().starts_with("https://")
+        let raw = raw.trim().to_ascii_lowercase();
+        raw.starts_with("https://") || raw.starts_with("wss://")
     }
 
     /// 按 scheme 选连接器建连。
     ///
-    /// 以前**只用 `Http`**：`endpoint_without_scheme` 先把 `https://` 剥掉，
-    /// 然后一律走明文连接器。于是配 `DATABASE_URL=https://db.internal:8000`
+    /// SurrealDB 3.3 的服务端 WebSocket RPC 是生产可用通道；HTTP `/rpc`
+    /// 会返回 `Method not allowed`。因此这里按 TLS 与否选择 `Ws` / `Wss`。
+    /// 以前只用 HTTP 连接器，于是数据库健康但 SoulAuth 仍会反复重启。
+    /// 配 `DATABASE_URL=https://db.internal:8000`
     /// 的部署实际是明文连库 —— root 口令、每一条查询、所有密码哈希与会话令牌
     /// 都在链路上裸奔，而且没有任何提示。同一个进程里 `rpc_signin_token`
     /// 走的却是 `endpoint_with_scheme`，它是认 https 的：两套行为并存，
     /// 说明这是疏漏而不是取舍。
     ///
-    /// surrealdb 3.0 的 `Https` 连接器与 `Http` 共用同一个 `Client` 类型，
+    /// surrealdb 3.3 的 `Wss` 连接器与 `Ws` 共用同一个 `Client` 类型，
     /// 所以这里只在建连这一步分派，其余代码不受影响。
     async fn connect(raw: &str) -> Result<Surreal<Client>> {
         let endpoint = Self::endpoint_without_scheme(raw);
         let result = if Self::is_tls_endpoint(raw) {
-            Surreal::<Client>::new::<Https>(&endpoint).await
+            Surreal::<Client>::new::<Wss>(&endpoint).await
         } else {
-            Surreal::<Client>::new::<Http>(&endpoint).await
+            Surreal::<Client>::new::<Ws>(&endpoint).await
         };
         result.map_err(|e| AuthError::DatabaseError(format!("Failed to connect: {e}")))
     }
@@ -107,14 +110,18 @@ impl Database {
             || host.starts_with("[::1]");
         if !loopback {
             warn!(
-                "DATABASE_URL points at a non-loopback host over plaintext HTTP ({host});                  database credentials, password hashes and session tokens travel unencrypted.                  Use https:// (or keep the database on a private link you trust)."
+                "DATABASE_URL points at a non-loopback host over a plaintext connection ({host});                  database credentials, password hashes and session tokens travel unencrypted.                  Use wss:// (or keep the database on a private link you trust)."
             );
         }
     }
 
     fn endpoint_with_scheme(raw: &str) -> String {
         let ep = raw.trim().trim_end_matches('/');
-        if ep.starts_with("http://") || ep.starts_with("https://") {
+        if let Some(rest) = ep.strip_prefix("ws://") {
+            format!("http://{rest}")
+        } else if let Some(rest) = ep.strip_prefix("wss://") {
+            format!("https://{rest}")
+        } else if ep.starts_with("http://") || ep.starts_with("https://") {
             ep.to_string()
         } else {
             format!("http://{}", ep)
@@ -1075,6 +1082,14 @@ mod tests {
             "db.example:8000"
         );
         assert_eq!(
+            Database::endpoint_without_scheme("ws://db.internal:8000"),
+            "db.internal:8000"
+        );
+        assert_eq!(
+            Database::endpoint_without_scheme("wss://db.example:8000/"),
+            "db.example:8000"
+        );
+        assert_eq!(
             Database::endpoint_without_scheme(" 127.0.0.1:8000 "),
             "127.0.0.1:8000"
         );
@@ -1089,6 +1104,10 @@ mod tests {
         assert_eq!(
             Database::endpoint_with_scheme("https://db.example:8000/"),
             "https://db.example:8000"
+        );
+        assert_eq!(
+            Database::endpoint_with_scheme("ws://db.internal:8000"),
+            "http://db.internal:8000"
         );
     }
 
