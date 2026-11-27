@@ -15,3 +15,6 @@ pub mod oidc_keys;
 pub mod rate_limiter;
 pub mod rbac;
 pub mod user_management;
+
+#[cfg(unix)]
+pub mod canonical_node;

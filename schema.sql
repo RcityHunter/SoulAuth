@@ -125,6 +125,8 @@ DEFINE FIELD binding_type ON identity_binding TYPE string DEFAULT "federated";
 DEFINE FIELD verification_state ON identity_binding TYPE string DEFAULT "verified";
 DEFINE FIELD bound_at ON identity_binding TYPE number;
 DEFINE FIELD revoked_at ON identity_binding TYPE option<number>;
+-- Verified Node provenance belongs to the sole canonical binding, not ActorIdentity.
+DEFINE FIELD canonical_source ON identity_binding TYPE option<object> FLEXIBLE;
 
 -- (provider, provider_subject) 必须联合唯一。
 --

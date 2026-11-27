@@ -81,6 +81,14 @@ impl VerificationState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalSource {
+    pub node_ref: String,
+    pub ai_actor_ref: String,
+    pub genesis_body_sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct IdentityBinding {
     pub id: Option<Thing>,
@@ -106,6 +114,9 @@ pub struct IdentityBinding {
     /// 撤销绑定 ≠ 撤销 ActorIdentity，也 ≠ 改写历史的联合认证事实
     /// （GA-06 §16）：过去那次通过该绑定完成的认证仍然发生过。
     pub revoked_at: Option<i64>,
+    /// Provenance of the verified OneSoul readback; never a second identity root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_source: Option<CanonicalSource>,
 }
 
 impl IdentityBinding {
@@ -123,12 +134,15 @@ impl IdentityBinding {
             verification_state: VerificationState::Verified.as_str().to_string(),
             bound_at: Utc::now().timestamp(),
             revoked_at: None,
+            canonical_source: None,
         }
     }
 
     /// 这条绑定当前是否可用于解析身份。
     pub fn is_active(&self) -> bool {
-        self.revoked_at.is_none()
+        ((self.provider == "soulseed" && self.binding_type == "canonical")
+            || (self.provider != "soulseed" && self.binding_type == "federated"))
+            && self.revoked_at.is_none()
             && VerificationState::parse(&self.verification_state) == VerificationState::Verified
     }
 }
@@ -155,6 +169,21 @@ mod tests {
         let mut b = IdentityBinding::new_federated(actor(), "github", "4001");
         b.verification_state = VerificationState::Pending.as_str().to_string();
         assert!(!b.is_active(), "未验证的绑定不得用于解析身份");
+    }
+
+    #[test]
+    fn soulseed_federated_binding_is_not_a_verified_canonical_identity() {
+        let mut b = IdentityBinding::new_federated(actor(), "soulseed", "soul-real");
+        assert!(
+            !b.is_active(),
+            "Soulseed provenance alone is not canonical binding"
+        );
+        b.binding_type = "canonical".into();
+        assert!(b.is_active());
+        b.provider = "google".into();
+        assert!(!b.is_active(), "canonical binding is reserved for Soulseed");
+        b.binding_type = "unknown".into();
+        assert!(!b.is_active());
     }
 
     #[test]

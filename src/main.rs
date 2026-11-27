@@ -324,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
         // 编排器的 liveness 探针如果被 429 打回，会被判成"进程死了"进而重启副本 ——
         // 限流本是为了抗压，那样反而成了压力下的自杀开关。
         .route("/health", get(health))
-        .layer(Extension(shared_db))
+        .layer(Extension(shared_db.clone()))
         .layer(Extension(app_state))
         .layer(Extension(auth_service))
         .layer(Extension(auth_cache))
@@ -340,6 +340,14 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid BIND_ADDR `{}`: {e}", config.bind_addr))?;
     info!("Server listening on {}", addr);
+    #[cfg(unix)]
+    let (canonical_stop, canonical_receiver) = tokio::sync::watch::channel(false);
+    #[cfg(unix)]
+    let canonical_task =
+        services::canonical_node::CanonicalNodeIngress::configured()?.map(|ingress| {
+            let db = shared_db.clone();
+            tokio::spawn(ingress.run(db, canonical_receiver))
+        });
     let shutdown = async {
         #[cfg(unix)]
         {
@@ -355,12 +363,18 @@ async fn main() -> anyhow::Result<()> {
         tokio::signal::ctrl_c()
             .await
             .expect("Failed to receive shutdown signal");
+        #[cfg(unix)]
+        let _ = canonical_stop.send(true);
         info!("Shutdown requested; draining HTTP requests");
     };
     axum::Server::bind(&addr)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown)
         .await?;
+    #[cfg(unix)]
+    if let Some(task) = canonical_task {
+        task.await??;
+    }
 
     Ok(())
 }
