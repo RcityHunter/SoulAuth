@@ -340,8 +340,26 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid BIND_ADDR `{}`: {e}", config.bind_addr))?;
     info!("Server listening on {}", addr);
+    let shutdown = async {
+        #[cfg(unix)]
+        {
+            let mut terminate =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("Failed to register SIGTERM handler");
+            tokio::select! {
+                result = tokio::signal::ctrl_c() => result.expect("Failed to receive shutdown signal"),
+                _ = terminate.recv() => {},
+            }
+        }
+        #[cfg(not(unix))]
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to receive shutdown signal");
+        info!("Shutdown requested; draining HTTP requests");
+    };
     axum::Server::bind(&addr)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown)
         .await?;
 
     Ok(())
