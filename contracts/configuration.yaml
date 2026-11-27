@@ -6,7 +6,8 @@
 # 实质改变 Supported Public Behavior 但注册表不声明 → Contract Drift。
 #
 # 唯一配置来源是**进程环境变量**（启动时读工作目录下的 .env）。
-# 当前 Release 不支持配置文件、远程配置或运行期重载。
+# Canonical Node ingress additionally accepts a root-owned scope file via its environment path.
+# 不支持远程配置或运行期重载。
 #
 # 生成依据：src/config.rs + src/main.rs（RUST_LOG 直读）
 
@@ -232,3 +233,11 @@ groups:
         default: "soulauth=debug,tower_http=info"
         description: "Standard tracing-subscriber EnvFilter syntax. Read directly by main.rs, not through Config."
         description_zh: "标准 tracing-subscriber EnvFilter 语法。由 main.rs 直接读取，不经 Config。"
+  - id: canonical_node
+    note: "Optional Unix-only cohost ingress. No public route or Human RBAC bypass."
+    keys:
+      - name: SOULAUTH_CANONICAL_NODE_CONFIG
+        required: false
+        default: ""
+        description: "Root-owned scope file for one verified born AI and trusted Node UID. Unset disables the private listener; invalid or empty paths refuse startup. See CANONICAL-NODE.md."
+        description_zh: "仅同机Unix私有入口；指向root所有且不可写的单一AI/Node范围文件。未设置不启用；无效或空路径拒绝启动。见CANONICAL-NODE.md。"

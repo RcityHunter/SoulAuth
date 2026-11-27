@@ -163,9 +163,13 @@ impl IdentityService {
             "actor_identity:{}",
             crate::utils::record_id::record_id_key_to_string(&binding.actor_identity_id)
         );
-        self.db
+        let actor = self
+            .db
             .find_record_by_field::<ActorIdentity>("actor_identity", "id", &actor_address)
-            .await
+            .await?;
+        Ok(actor.filter(|actor| {
+            provider != "soulseed" || actor.actor_kind == ActorKind::AiActor.as_str()
+        }))
     }
 
     /// 为一个已有身份建立外部绑定。
@@ -175,6 +179,9 @@ impl IdentityService {
         provider: &str,
         provider_subject: &str,
     ) -> Result<IdentityBinding> {
+        if provider == "soulseed" {
+            return Err(AuthError::PermissionDenied);
+        }
         let actor_id = actor
             .id
             .clone()
